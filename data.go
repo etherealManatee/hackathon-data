@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 )
 
 type Response struct {
@@ -51,12 +53,10 @@ func main() {
 		log.Println(err)
 		return
 	}
-	// assumes per page is always 9
-	pages, remainder := calculatePages(Response.Meta)
-	fmt.Println(pages, remainder)
-	allHackathons := make([]Hackathon, 0)
 
-	populateHackathons(Response.Hackathons, &allHackathons, pages, remainder)
+	pages, remainder := calculatePages(Response.Meta)
+
+	allHackathons := make([]Hackathon, 0)
 
 	for _, hackathonRaw := range Response.Hackathons {
 		h := &Hackathon{
@@ -68,40 +68,69 @@ func main() {
 		}
 		allHackathons = append(allHackathons, *h)
 	}
-	fmt.Println(allHackathons)
 
-	// 	file, err := os.Create("devpost.csv")
-	// 	if err != nil {
-	// 		log.Println(err)
-	// 		return
-	// 	}
-	// 	defer file.Close()
+	populateHackathons(Response.Hackathons, &allHackathons, pages, remainder)
 
-	// csvWriter := csv.NewWriter(file)
-	//
-	//	for _, hackathon := range Response.Hackathons {
-	//		row := []string{
-	//			hackathon.Title,
-	//			hackathon.OrganisationName,
-	//			hackathon.Date,
-	//			hackathon.DisplayedLocation.Location,
-	//			hackathon.Url,
-	//		}
-	//		_ = csvWriter.Write(row)
-	//	}
-	//
-	// csvWriter.Flush()
+	// check that hackathons retrieved is same as the number stated in their total_count
+	if len(allHackathons) != Response.Meta.Count {
+		log.Panicln("Hackathons retrieved does not match total_count, please check!")
+	}
+
+	// write to csv
+	file, err := os.Create("devpost.csv")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer file.Close()
+
+	csvWriter := csv.NewWriter(file)
+
+	for _, hackathon := range allHackathons {
+		row := []string{
+			hackathon.Title,
+			hackathon.OrganisationName,
+			hackathon.Date,
+			hackathon.Location,
+			hackathon.Url,
+		}
+		_ = csvWriter.Write(row)
+	}
+
+	csvWriter.Flush()
 }
 
 func calculatePages(meta Meta) (pages int, remainder int) {
 	return meta.Count / meta.PerPage, meta.Count % meta.PerPage
 }
 
-func populateHackathons(rawHackathon []HackathonData, allHackathon *[]Hackathon, pages int, remainder int) {
+func populateHackathons(rawHackathon []HackathonData, allHackathons *[]Hackathon, pages int, remainder int) {
 	totalPages := pages
 	if remainder != 0 {
 		totalPages += 1
 	}
-	fmt.Println(totalPages)
-	// apiUrl := fmt.Sprintf("https://devpost.com/api/hackathons?page=%v&status[]=upcoming", page)
+
+	// start with page 2 since page 1 was already done
+	for i := 2; i < totalPages+1; i++ {
+		apiUrl := fmt.Sprintf("https://devpost.com/api/hackathons?page=%v&status[]=upcoming", i)
+		response, err := http.Get(apiUrl)
+		if err != nil {
+			panic(err)
+		}
+		var Response Response
+		if err := json.NewDecoder(response.Body).Decode(&Response); err != nil {
+			log.Println(err)
+			return
+		}
+		for _, hackathonRaw := range Response.Hackathons {
+			h := &Hackathon{
+				Title:            hackathonRaw.Title,
+				Location:         hackathonRaw.DisplayedLocation.Location,
+				Date:             hackathonRaw.Date,
+				OrganisationName: hackathonRaw.OrganisationName,
+				Url:              hackathonRaw.Url,
+			}
+			*allHackathons = append(*allHackathons, *h)
+		}
+	}
 }
